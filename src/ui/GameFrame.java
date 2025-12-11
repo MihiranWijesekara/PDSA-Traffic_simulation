@@ -207,19 +207,25 @@ public class GameFrame extends JFrame {
     }
 
     private void newRound() {
+        // Reset the traffic network with new random capacities
         network.randomizeCapacities();
+
+        // Clear previous player input
         txtAnswer.setText("");
+
+        // Update the UI to indicate that the new round has started
         lblStatus.setText("New round started! Analyze the graph and enter your maximum flow estimate.");
         lblStatus.setForeground(PRIMARY_COLOR);
         lblTimes.setText(" ");
+
+        // Repaint the graph with new capacities
         graphPanel.repaint();
     }
 
     private void submitAnswer() {
         String input = txtAnswer.getText().trim();
         if (input.isEmpty()) {
-            showStyledMessage("Please enter your maximum flow estimate.",
-                    "Input Required", JOptionPane.WARNING_MESSAGE);
+            showStyledMessage("Please enter your maximum flow estimate.", "Input Required", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
@@ -228,8 +234,7 @@ public class GameFrame extends JFrame {
             playerAnswer = Integer.parseInt(input);
             if (playerAnswer < 0) throw new NumberFormatException("negative");
         } catch (NumberFormatException ex) {
-            showStyledMessage("Please enter a valid non-negative integer.",
-                    "Invalid Input", JOptionPane.WARNING_MESSAGE);
+            showStyledMessage("Please enter a valid non-negative integer.", "Invalid Input", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
@@ -246,8 +251,7 @@ public class GameFrame extends JFrame {
         double timeBms = (t4 - t3) / 1_000_000.0;
 
         if (flowA != flowB) {
-            showStyledMessage("Warning: Algorithms returned different values (" +
-                    flowA + " vs " + flowB + ").", "Algorithm Mismatch", JOptionPane.ERROR_MESSAGE);
+            showStyledMessage("Warning: Algorithms returned different values (" + flowA + " vs " + flowB + ").", "Algorithm Mismatch", JOptionPane.ERROR_MESSAGE);
         }
 
         int correct = flowA;
@@ -270,23 +274,29 @@ public class GameFrame extends JFrame {
             prefix = "TRY AGAIN";
         }
 
-        lblStatus.setText(String.format(
-                "%s | Correct: %d vehicles/min | Your answer: %d | Difference: %d",
-                prefix, correct, playerAnswer, diff));
+        lblStatus.setText(String.format("%s | Correct: %d vehicles/min | Your answer: %d | Difference: %d", prefix, correct, playerAnswer, diff));
         lblStatus.setForeground(resultColor);
 
-        lblTimes.setText(String.format(
-                "Algorithm A: %.3f ms  |  Algorithm B: %.3f ms",
-                timeAms, timeBms));
+        lblTimes.setText(String.format("Algorithm A: %.3f ms  |  Algorithm B: %.3f ms", timeAms, timeBms));
 
         String name = txtPlayerName.getText().trim();
         if (!name.isEmpty()) {
             int playerId = dbManager.getOrCreatePlayerId(name);
-            GameRoundResult gr = new GameRoundResult(playerId, correct, playerAnswer,
-                    result, network);
+            GameRoundResult gr = new GameRoundResult(playerId, correct, playerAnswer, result, network);
             int roundId = dbManager.saveGameRound(gr);
             dbManager.saveAlgorithmRun(roundId, "GreedyBottleneck", timeAms);
             dbManager.saveAlgorithmRun(roundId, "DijkstraMaxCapacity", timeBms);
+        }
+
+        // Show result in popup modal and start a new round after OK is pressed
+        int option = JOptionPane.showOptionDialog(
+                this,
+                "Result: " + result + "\nYour guess was " + (playerAnswer == correct ? "correct!" : "incorrect!"),
+                "Game Result",
+                JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null, new Object[]{"OK"}, null);
+
+        if (option == JOptionPane.OK_OPTION) {
+            newRound(); // Reset game after the user clicks OK
         }
     }
 
