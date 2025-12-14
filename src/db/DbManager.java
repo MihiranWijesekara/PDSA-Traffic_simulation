@@ -7,7 +7,6 @@ import java.sql.*;
 
 public class DbManager {
 
-    // TODO: change these to your own DB config
     private static final String URL = "jdbc:mysql://localhost:3306/traffic_game";
     private static final String USERNAME = "root";
     private static final String PASSWORD = "Ab2#*De#";
@@ -19,12 +18,15 @@ public class DbManager {
             st.executeUpdate(
                     "CREATE TABLE IF NOT EXISTS players (" +
                             "player_id INT AUTO_INCREMENT PRIMARY KEY," +
-                            "name VARCHAR(100) NOT NULL)");
+                            "name VARCHAR(100) NOT NULL" +
+                            ")"
+            );
 
+            // IMPORTANT: player_id is now NULLABLE
             st.executeUpdate(
                     "CREATE TABLE IF NOT EXISTS game_rounds (" +
                             "round_id INT AUTO_INCREMENT PRIMARY KEY," +
-                            "player_id INT NOT NULL," +
+                            "player_id INT NULL," +
                             "played_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
 
                             "cap_ab INT, cap_ac INT, cap_ad INT," +
@@ -38,7 +40,11 @@ public class DbManager {
                             "correct_max_flow INT NOT NULL," +
                             "player_answer INT NOT NULL," +
                             "result VARCHAR(10) NOT NULL," +
-                            "FOREIGN KEY (player_id) REFERENCES players(player_id))");
+
+                            "FOREIGN KEY (player_id) REFERENCES players(player_id) " +
+                            "ON DELETE SET NULL" +
+                            ")"
+            );
 
             st.executeUpdate(
                     "CREATE TABLE IF NOT EXISTS algorithm_runs (" +
@@ -46,7 +52,10 @@ public class DbManager {
                             "round_id INT NOT NULL," +
                             "algorithm VARCHAR(50) NOT NULL," +
                             "time_ms DOUBLE NOT NULL," +
-                            "FOREIGN KEY (round_id) REFERENCES game_rounds(round_id))");
+                            "FOREIGN KEY (round_id) REFERENCES game_rounds(round_id) " +
+                            "ON DELETE CASCADE" +
+                            ")"
+            );
 
         } catch (SQLException ex) {
             ex.printStackTrace();
@@ -57,15 +66,17 @@ public class DbManager {
         return DriverManager.getConnection(URL, USERNAME, PASSWORD);
     }
 
+    // Create player only if a correct answer is given (call this ONLY on WIN)
     public int getOrCreatePlayerId(String name) {
         if (name == null || name.isBlank()) {
-            name = "Anonymous";
+            return -1; // don't create anonymous players
         }
+
         try (Connection conn = getConnection()) {
 
             try (PreparedStatement ps =
                          conn.prepareStatement("SELECT player_id FROM players WHERE name = ?")) {
-                ps.setString(1, name);
+                ps.setString(1, name.trim());
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) return rs.getInt(1);
                 }
@@ -74,7 +85,7 @@ public class DbManager {
             try (PreparedStatement ps = conn.prepareStatement(
                     "INSERT INTO players(name) VALUES (?)",
                     Statement.RETURN_GENERATED_KEYS)) {
-                ps.setString(1, name);
+                ps.setString(1, name.trim());
                 ps.executeUpdate();
                 try (ResultSet rs = ps.getGeneratedKeys()) {
                     if (rs.next()) return rs.getInt(1);
@@ -89,6 +100,7 @@ public class DbManager {
 
     public int saveGameRound(GameRoundResult result) {
         int roundId = -1;
+
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT INTO game_rounds(" +
@@ -105,7 +117,14 @@ public class DbManager {
                      Statement.RETURN_GENERATED_KEYS)) {
 
             TrafficNetwork net = result.getNetwork();
-            ps.setInt(1, result.getPlayerId());
+
+            // If playerId not valid, store NULL so players table stays "correct-only"
+            if (result.getPlayerId() > 0) {
+                ps.setInt(1, result.getPlayerId());
+            } else {
+                ps.setNull(1, Types.INTEGER);
+            }
+
             ps.setInt(2, net.getCapAB());
             ps.setInt(3, net.getCapAC());
             ps.setInt(4, net.getCapAD());
@@ -131,11 +150,13 @@ public class DbManager {
         } catch (SQLException ex) {
             ex.printStackTrace();
         }
+
         return roundId;
     }
 
     public void saveAlgorithmRun(int roundId, String algorithm, double timeMs) {
         if (roundId <= 0) return;
+
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(
                      "INSERT INTO algorithm_runs(round_id, algorithm, time_ms) VALUES (?,?,?)")) {

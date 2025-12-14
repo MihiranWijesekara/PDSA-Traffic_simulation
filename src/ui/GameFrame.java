@@ -1,7 +1,7 @@
 package ui;
 
-import algo.DijkstraMaxCapacity;
-import algo.GreedyBottleneck;
+import algo.EdmondsKarpMaxFlow;
+import algo.FordFulkersonMaxFlow;
 import db.DbManager;
 import model.GameRoundResult;
 import model.TrafficNetwork;
@@ -206,19 +206,21 @@ public class GameFrame extends JFrame {
         );
     }
 
-    private void newRound() {
-        // Reset the traffic network with new random capacities
-        network.randomizeCapacities();
+    private static String fmtNanos(long ns) {
+        if (ns < 1_000) return ns + " ns";
+        if (ns < 1_000_000) return String.format("%.2f µs", ns / 1_000.0);
+        if (ns < 1_000_000_000) return String.format("%.2f ms", ns / 1_000_000.0);
+        return String.format("%.2f s", ns / 1_000_000_000.0);
+    }
 
-        // Clear previous player input
+    private void newRound() {
+        network.randomizeCapacities();
         txtAnswer.setText("");
 
-        // Update the UI to indicate that the new round has started
         lblStatus.setText("New round started! Analyze the graph and enter your maximum flow estimate.");
         lblStatus.setForeground(PRIMARY_COLOR);
-        lblTimes.setText(" ");
 
-        // Repaint the graph with new capacities
+        lblTimes.setText(" "); // reset timing label
         graphPanel.repaint();
     }
 
@@ -240,27 +242,34 @@ public class GameFrame extends JFrame {
 
         int[][] capacity = network.buildCapacityMatrix();
 
-        long t1 = System.nanoTime();
-        int flowA = GreedyBottleneck.maxBottleneck(capacity, TrafficNetwork.A, TrafficNetwork.T);
-        long t2 = System.nanoTime();
-        double timeAms = (t2 - t1) / 1_000_000.0;
+        // ---- Algorithm 1: Ford-Fulkerson (DFS) ----
+        long ffStart = System.nanoTime();
+        int maxFlowFF = FordFulkersonMaxFlow.maxFlow(capacity, TrafficNetwork.A, TrafficNetwork.T);
+        long ffNs = System.nanoTime() - ffStart;
 
-        long t3 = System.nanoTime();
-        int flowB = DijkstraMaxCapacity.maxCapacityPath(capacity, TrafficNetwork.A, TrafficNetwork.T);
-        long t4 = System.nanoTime();
-        double timeBms = (t4 - t3) / 1_000_000.0;
+        // ---- Algorithm 2: Edmonds-Karp (BFS) ----
+        long ekStart = System.nanoTime();
+        int maxFlowEK = EdmondsKarpMaxFlow.maxFlow(capacity, TrafficNetwork.A, TrafficNetwork.T);
+        long ekNs = System.nanoTime() - ekStart;
 
-        if (flowA != flowB) {
-            showStyledMessage("Warning: Algorithms returned different values (" + flowA + " vs " + flowB + ").", "Algorithm Mismatch", JOptionPane.ERROR_MESSAGE);
+        // Correct max flow for the game
+        int correctMaxFlow = maxFlowFF;
+
+        // Show execution times in UI
+        if (maxFlowFF != maxFlowEK) {
+            lblTimes.setText("WARNING: Algorithms disagree! FF=" + maxFlowFF + " EK=" + maxFlowEK +
+                    " | FF time: " + fmtNanos(ffNs) + " | EK time: " + fmtNanos(ekNs));
+        } else {
+            lblTimes.setText("Ford-Fulkerson(DFS): " + fmtNanos(ffNs) +
+                    " | Edmonds-Karp(BFS): " + fmtNanos(ekNs));
         }
 
-        int correct = flowA;
-        int diff = Math.abs(playerAnswer - correct);
+        int diff = Math.abs(playerAnswer - correctMaxFlow);
         String result;
         Color resultColor;
         String prefix;
 
-        if (playerAnswer == correct) {
+        if (playerAnswer == correctMaxFlow) {
             result = "WIN";
             resultColor = SUCCESS_COLOR;
             prefix = "PERFECT";
@@ -274,31 +283,47 @@ public class GameFrame extends JFrame {
             prefix = "TRY AGAIN";
         }
 
-        lblStatus.setText(String.format("%s | Correct: %d vehicles/min | Your answer: %d | Difference: %d", prefix, correct, playerAnswer, diff));
+        lblStatus.setText(String.format(
+                "%s | Correct: %d vehicles/min | Your answer: %d | Difference: %d",
+                prefix, correctMaxFlow, playerAnswer, diff
+        ));
         lblStatus.setForeground(resultColor);
 
-        lblTimes.setText(String.format("Algorithm A: %.3f ms  |  Algorithm B: %.3f ms", timeAms, timeBms));
-
+        // ✅ Save player ONLY if WIN (correct answer)
         String name = txtPlayerName.getText().trim();
-        if (!name.isEmpty()) {
-            int playerId = dbManager.getOrCreatePlayerId(name);
-            GameRoundResult gr = new GameRoundResult(playerId, correct, playerAnswer, result, network);
-            int roundId = dbManager.saveGameRound(gr);
-            dbManager.saveAlgorithmRun(roundId, "GreedyBottleneck", timeAms);
-            dbManager.saveAlgorithmRun(roundId, "DijkstraMaxCapacity", timeBms);
+        int playerId = -1;
+        if ("WIN".equals(result) && !name.isBlank()) {
+            playerId = dbManager.getOrCreatePlayerId(name);
         }
 
-        // Show result in popup modal and start a new round after OK is pressed
+        // ✅ Save game round ALWAYS (playerId = -1 will be stored as NULL in DB if you updated DbManager)
+        GameRoundResult gr = new GameRoundResult(playerId, correctMaxFlow, playerAnswer, result, network);
+        int roundId = dbManager.saveGameRound(gr);
+
+        // ✅ Save algorithm execution time for EACH round
+        dbManager.saveAlgorithmRun(roundId, "Ford-Fulkerson(DFS)", ffNs / 1_000_000.0);
+        dbManager.saveAlgorithmRun(roundId, "Edmonds-Karp(BFS)", ekNs / 1_000_000.0);
+
         int option = JOptionPane.showOptionDialog(
                 this,
-                "Result: " + result + "\nYour guess was " + (playerAnswer == correct ? "correct!" : "incorrect!"),
+                "Result: " + result +
+                        "\nYour guess was " + (playerAnswer == correctMaxFlow ? "correct!" : "incorrect!") +
+                        "\n\nExecution Times:\n" +
+                        "Ford-Fulkerson(DFS): " + fmtNanos(ffNs) + "\n" +
+                        "Edmonds-Karp(BFS): " + fmtNanos(ekNs),
                 "Game Result",
-                JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null, new Object[]{"OK"}, null);
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.INFORMATION_MESSAGE,
+                null,
+                new Object[]{"OK"},
+                null
+        );
 
         if (option == JOptionPane.OK_OPTION) {
-            newRound(); // Reset game after the user clicks OK
+            newRound();
         }
     }
+
 
     private void showStyledMessage(String message, String title, int messageType) {
         UIManager.put("OptionPane.background", CARD_COLOR);
